@@ -1207,7 +1207,7 @@ class Model(Container):
             return outs[0]
         return outs
 
-    def _test_loop(self, f, ins, batch_size=32, verbose=0):
+    def _test_loop(self, f, ins, batch_size=32, verbose=0, steps_per_epoch=None):
         """Abstract method to loop over some data in batches.
 
         # Arguments
@@ -1215,6 +1215,11 @@ class Model(Container):
             ins: list of tensors to be fed to `f`.
             batch_size: integer batch size.
             verbose: verbosity mode.
+            steps_per_epoch: Total number of steps (batches of samples)
+                before declaring one epoch finished and starting the
+                next epoch. The default `None` is equal to the number
+                of unique samples in your dataset divided by the batch
+                size, or 1 if that cannot be determined.
 
         # Returns
             Scalar loss (if the model has a single output and no metrics)
@@ -1222,15 +1227,18 @@ class Model(Container):
             and/or metrics). The attribute `model.metrics_names` will give you
             the display labels for the scalar outputs.
         """
-        if ins and hasattr(ins[0], 'shape'):
-            samples = ins[0].shape[0]
+        if steps_per_epoch is not None:
+            samples = steps_per_epoch
         else:
-            # May happen if we are running `evaluate` without Numpy input data,
-            # i.e. if all inputs to the models are data tensors
-            # instead of placeholders.
-            # In that case we will run `evaluate` over a single batch.
-            samples = batch_size
-            verbose = 2
+            if ins and hasattr(ins[0], 'shape'):
+                samples = ins[0].shape[0]
+            else:
+                # May happen if we are running `fit` without Numpy input data,
+                # i.e. if all inputs to the models are data tensors
+                # instead of placeholders.
+                # In that case we will run `fit` over a single batch.
+                samples = batch_size
+                verbose = 2
 
         outs = []
         if verbose == 1:
@@ -1503,7 +1511,8 @@ class Model(Container):
                               initial_epoch=initial_epoch,
                               steps_per_epoch=steps_per_epoch)
 
-    def evaluate(self, x, y, batch_size=32, verbose=1, sample_weight=None):
+    def evaluate(self, x, y, batch_size=32, verbose=1, sample_weight=None,
+                 steps_per_epoch=None):
         """Returns the loss value & metrics values for the model in test mode.
 
         Computation is done in batches.
@@ -1523,6 +1532,11 @@ class Model(Container):
             verbose: verbosity mode, 0 or 1.
             sample_weight: Array of weights to weight the contribution
                 of different samples to the loss and metrics.
+            steps_per_epoch: Total number of steps (batches of samples)
+                before declaring one epoch finished and starting the
+                next epoch. The default `None` is equal to the number
+                of unique samples in your dataset divided by the batch
+                size, or 1 if that cannot be determined.
 
         # Returns
             Scalar test loss (if the model has a single output and no metrics)
@@ -1530,6 +1544,24 @@ class Model(Container):
             and/or metrics). The attribute `model.metrics_names` will give you
             the display labels for the scalar outputs.
         """
+        if K.is_keras_tensor(y, expect_other_types=True):
+            self.target_configuration = [y]
+            y = None
+            self._compile(*self._saved_args, **self._saved_kwargs)
+        elif y is not None:
+            recompile = False
+            self.target_configuration = []
+            for i, yi in enumerate(y):
+                if K.is_keras_tensor(yi, expect_other_types=True):
+                    self.target_configuration.append(yi)
+                    y[i] = None
+                    recompile = True
+                else:
+                    self.target_configuration.append(None)
+
+            if recompile:
+                self._compile(*self._saved_args, **self._saved_kwargs)
+
         # Validate user data.
         x, y, sample_weights = self._standardize_user_data(
             x, y,
@@ -1542,7 +1574,8 @@ class Model(Container):
         f = self.test_function
         return self._test_loop(f, ins,
                                batch_size=batch_size,
-                               verbose=verbose)
+                               verbose=verbose,
+                               steps_per_epoch=steps_per_epoch)
 
     def predict(self, x, batch_size=32, verbose=0):
         """Generates output predictions for the input samples.
